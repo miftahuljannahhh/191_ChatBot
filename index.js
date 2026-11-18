@@ -1,121 +1,134 @@
-const express = require('express'); 
-const dotenv = require('dotenv');
+const express = require("express");
+const dotenv = require("dotenv");
 
 dotenv.config();
 
 const app = express();
-const port = 3000;
+const PORT = 3000;
 
 app.use(express.json());
 app.use(express.static("public"));
 
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
     res.redirect("/index.html");
 });
 
 app.post("/api/chat", async (req, res) => {
-    try {
-        const messages  = req.body.messages;
+    try{
+        const messages = req.body.messages;
 
-        if (!messages || !Array.isArray(messages)) {
-            return res.status(400).json({ error: "Messages harus berupa array"
-             });
+        if(!messages || !Array.isArray(messages)){
+            return res.status(400).json({
+                error: "Messages harus berupa array"
+                
+            });
         }
+        const response = await fetch(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+                method: "POST",
 
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`
+                },
 
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`
-            },
-            body: JSON.stringify({
-                model: "nvidia/nemotron-3.5-super-v1:free",
-                messages: messages,
-                temperature: 0.7,
-                max_tokens: 1000
-            })
-        });
+                body: JSON.stringify({
+                    model: "nvidia/nemotron-3.5-super-vl:free",
+                    messages: messages,
+                    temperature: 0.7,
+                    max_tokens:1000,
+                    stream: true
+                })
+            }
+        );
 
-        if (!response.ok) {
+        if(!response.ok){
             const errorData = await response.text();
 
             console.error("OpenRouter Error:", errorData);
 
-            return res.status(response.status).json({ error: errorData });
+            return res.status(response.status).json({error: errorData});
+        }
+        //header untuk streaming
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
         }
 
-        //Header untuk streaming
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
 
-        let buffer = "";
+            //simpan bagian terakhir karena mungkin belum lengkap
+            buffer = lines.pop();
 
-        while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-                break;
-            }
-
-            buffer += decoder.decode(value, { stream: true });
-
-           const lines = buffer.split("\n");
-           buffer = lines.pop();
-
-           //simpan bagian terakhir dari buffer yang belum lengkap
-            for (const line of lines) {
-
+            for(const line of lines) {
                 const trimmedLine = line.trim();
 
-                if (!trimmedLine) {
+                if(!trimmedLine){
                     continue;
                 }
 
-                if (trimmedLine.startsWith("data: ")) {
+                if(!trimmedLine.startsWith("data:")){
                     continue;
                 }
 
-                const data = trimmedLine.slice(5).trim();
+                const data = trimmedLine.replace(/^data:\s*/, "");
 
                 if (data === "[DONE]") {
                     continue;
                 }
 
+
                 try {
                     const json = JSON.parse(data);
 
-                    const content = json.choices?.[0]?.delta?.content;
+                    const content =
+                    json.choices?.[0]?.delta?.content;
 
-                    if (content) {
+                    if(content){
                         res.write(`data: ${JSON.stringify(content)}\n\n`);
                     }
-
-                } catch (error) {
-                    console.error("Gagal parsing streaming data:", error);
+                }catch (error){
+                    console.error(
+                        "Gagal parsing streaming data:",
+                        error
+                    );
                 }
             }
-
-            res.write("data: [DONE]\n\n");
-            res.end();
         }
+        res.write("data: [DONE]\n\n");
+        res.end()
+        
+  
+    }catch(error) {
 
-    } catch (error) {
         console.error("Server Error:", error);
 
-        if (!res.headersSent) {
-            res.status(500).json({ error: "Terjadi kesalahan pada server" });
-    } else {
-        res.write(`data: ${JSON.stringify("Terjadi kesalahan pada server" )}\n\n`);
+        if(!res.headersSent){
+            res.status(500).json({
+                error: "Terjadi kesalahan pada server"
+            });
+        }else{
+            res.write(
+                `data: ${JSON.stringify(
+                    "Terjadi kesalahan pada server"
+                )}\n\n`
+            );
 
-        res.end();
-    }
-
-}
+            res.end();
+        }
+    } 
 });
 
 app.listen(PORT, () => {
